@@ -3,6 +3,7 @@
 Created on Tue Aug 22 20:46:31 2017
 
 @author: the4960
+Input last name of an artist to download their art.  Utilizes http://www.wga.hu/
 """
 import requests
 import sys
@@ -57,6 +58,4 @@ def downloadArt(artist_last_name):
                 return
     print("DONE w/ dir "+artist_last_name)
             
-            
-
 downloadArt("maella")
