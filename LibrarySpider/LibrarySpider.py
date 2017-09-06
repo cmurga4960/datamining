@@ -5,6 +5,7 @@ Created on Wed Sep 06 15:34:49 2017
 @author: the4960
 
 LibrarySpider
+Gets plaintext book links from https://openlibrary.org
 """
 
 from bs4 import BeautifulSoup
