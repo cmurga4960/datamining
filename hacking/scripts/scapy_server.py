@@ -38,6 +38,7 @@ server_port = 3000
 # set tcp/udp_experssion = None if not using
 tcp_expression = r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED' #r'^ok$'  #r'^BUSY$'
 udp_expression = tcp_expression
+tcp_expression = None
 color = True
 #CUSTOMIZE ME
 
@@ -79,7 +80,7 @@ def answerTCP(packet):
 	# send psh ack (main tcp packet)
 	SeqNr += 1
 	#payload="HTTP/1.1 200 OK\x0d\x0aDate: Wed, 29 Sep 2010 20:19:05 GMT\x0d\x0aServer: Testserver\x0d\x0aConnection: Keep-Alive\x0d\x0aContent-Type: text/html; charset=UTF-8\x0d\x0aContent-Length: 291\x0d\x0a\x0d\x0a<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\"><html><head><title>Testserver</title></head><body bgcolor=\"black\" text=\"white\" link=\"blue\" vlink=\"purple\" alink=\"red\"><p><font face=\"Courier\" color=\"blue\">-Welcome to test server-------------------------------</font></p></body></html>"
-	payload = str(rstr.xeger(tcp_expression))
+	payload = rstr.xeger(tcp_expression)
 	tcp_pshack = TCP(sport=server_port, dport=ValueOfPort, flags="PA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
 	tcp_main = ip/tcp_pshack/payload
 	print(tcp_color,end="")
@@ -106,7 +107,7 @@ def answerUDP(packet):
 	
 	ip = IP(src=ip_addr, dst=victim_ip)
 	udp = UDP(sport=server_port, dport=ValueOfPort)
-	payload = str(rstr.xeger(tcp_expression))
+	payload = rstr.xeger(udp_expression)
 	udp_main = ip/udp/payload
 	send(udp_main)
 	print(udp_color + 'udp client done' + reset_color)
@@ -138,7 +139,9 @@ if __name__ == '__main__':
 		tcp_thread.daemon = True
 		tcp_thread.start()
 	if udp_expression:
-		#TODO - set udp iptables rule? dont think so
+		set_iptable = 'iptables -I OUTPUT -p icmp --icmp-type destination-unreachable -j DROP'
+		if not set_iptable in os.popen('iptables-save').read():
+			os.system(set_iptable)
 		udp_thread = threading.Thread(target=startUDP)
 		udp_thread.daemon = True
 		udp_thread.start()
