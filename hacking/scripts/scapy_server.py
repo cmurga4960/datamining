@@ -166,5 +166,6 @@ NOTES
 - Note, not all services will work due to the limitations of rstr.xeger and nmaps usage of perl's 'i' and 's' options.  
   In general, dynamically generating string that fit regex is a hard problem
 - Nmap -O (OS scan) and -sU (UDP scan) options require root (at least on Android's Termux).
+- The -sV option will not send UDP packet at all unless -sU is specified. Jeez nmap, letting me down here xD
 '''
 
