@@ -101,7 +101,7 @@ def answerTCP(packet):
 def answerUDP(packet):
 	print(udp_color + 'New udp client:')
 	packet.summary()
-	print(reset_color,end="") 
+	print(reset_color, end="") 
 	ValueOfPort = packet.sport
 	victim_ip = packet['IP'].src
 	
@@ -109,6 +109,7 @@ def answerUDP(packet):
 	udp = UDP(sport=server_port, dport=ValueOfPort)
 	payload = rstr.xeger(udp_expression)
 	udp_main = ip/udp/payload
+	print(udp_color, end="") 
 	send(udp_main)
 	print(udp_color + 'udp client done' + reset_color)
 	return ""
@@ -167,5 +168,14 @@ NOTES
   In general, dynamically generating string that fit regex is a hard problem
 - Nmap -O (OS scan) and -sU (UDP scan) options require root (at least on Android's Termux).
 - The -sV option will not send UDP packet at all unless -sU is specified. Jeez nmap, letting me down here xD
+
+
+LINKS
+- Scapy send vs sendp  http://abunchofbaloney.blogspot.com/2014/09/scapy-send-vs-sendp.html\
+- Nmap version options   https://nmap.org/book/man-version-detection.html
+- Nmap service detction file format  https://nmap.org/book/vscan-fileformat.html#vscan-fileformat-example
+- Nmap os dection workings  https://nmap.org/book/osdetect-methods.html
+- Linux routing  https://www.cyberciti.biz/faq/linux-route-add/
+- BPF syntax http://biot.com/capstats/bpf.html
 '''
 
