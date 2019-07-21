@@ -32,17 +32,8 @@ set tcp_experssion = r'^NXD-([\d.]+)\n'
 See notes at the bottom for more details.
 '''
 
-#CUSTOMIZE ME
-ifacee = 'eth0'
-server_port = 3000
-# set tcp/udp_experssion = None if not using
-tcp_expression = r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED' #r'^ok$'  #r'^BUSY$'
-udp_expression = tcp_expression
-tcp_expression = None
-color = True
-#CUSTOMIZE ME
-
 #EXTRAS
+color = True
 tcp_color = Fore.LIGHTMAGENTA_EX if color else ''
 udp_color = Fore.LIGHTBLUE_EX if color else ''
 reset_color = Style.RESET_ALL if color else ''
@@ -51,102 +42,273 @@ green = Fore.GREEN if color else ''
 #EXTRAS
 
 
-def answerTCP(packet):
-	print(tcp_color + 'New tcp client:')
-	packet.summary()
-	print(reset_color, end="") 
+class NmapServiceServer:
+	def __init__(self, port, net_iface, expression=r'', service_name='', tcp=True):
+		self.port = port
+		if expression:
+			self.expression = expression
+		elif service_name:
+			self.expression = NmapServiceServer.findExpression(service_name.strip())
+			if not self.expression:
+				raise Exception('Service not found by name')
+		else:
+			raise Exception('Must set expression or service_name')
+		self.iface = net_iface
+		self.tcp = tcp
+		self.udp = not tcp
+		# TODO add tcp + udp logic
+		self.thread = Thread(target=self._startService)
+		self.thread.daemon = True
+		self._stopper = True
 
-	ValueOfPort = packet.sport
-	SeqNr = packet.seq
-	AckNr = packet.seq+1
-	victim_ip = packet['IP'].src
-	
-	# send syn ack
-	ip = IP(src=ip_addr, dst=victim_ip)
-	tcp_synack = TCP(sport=server_port, dport=ValueOfPort, flags="SA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
-	handshake = ip/tcp_synack
-	print(tcp_color,end="")
-	ANSWER = sr1(handshake, timeout=8)
-	print(reset_color, end="") 
-	if not ANSWER:
-		print(red + "TIMEOUT on syn ack" + reset_color)
-		return ""	
+		ni.ifaddresses(self.iface)
+		self.ip_addr = ni.ifaddresses(self.iface)[ni.AF_INET][0]['addr']
 
-	# Capture next TCP packet if the client talks first
-	#GEThttp = sniff(filter="tcp and src host "+str(victim_ip)+" and port "+str(server_port),count=1)
-	#GEThttp = GEThttp[0]
-	#AckNr = AckNr+len(GEThttp['Raw'].load)
-	
-	# send psh ack (main tcp packet)
-	SeqNr += 1
-	#payload="HTTP/1.1 200 OK\x0d\x0aDate: Wed, 29 Sep 2010 20:19:05 GMT\x0d\x0aServer: Testserver\x0d\x0aConnection: Keep-Alive\x0d\x0aContent-Type: text/html; charset=UTF-8\x0d\x0aContent-Length: 291\x0d\x0a\x0d\x0a<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\"><html><head><title>Testserver</title></head><body bgcolor=\"black\" text=\"white\" link=\"blue\" vlink=\"purple\" alink=\"red\"><p><font face=\"Courier\" color=\"blue\">-Welcome to test server-------------------------------</font></p></body></html>"
-	payload = rstr.xeger(tcp_expression)
-	tcp_pshack = TCP(sport=server_port, dport=ValueOfPort, flags="PA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
-	tcp_main = ip/tcp_pshack/payload
-	print(tcp_color,end="")
-	ACKDATA = sr1(tcp_main, timeout=5)
-	print(reset_color, end="") 
-	if not ACKDATA:
-		print(red + "TIMEOUT on syn ack" + reset_color)
+	def start(self):
+		self._stopper = False
+		self.thread.start()
+
+	def stop(self):
+		self._stopper = True
+		self._cleanIPTables()
+
+	@staticmethod
+	def findExpression(service_name):
+		services = open('/usr/share/nmap/nmap-service-probes', 'r')
+		lines = services.read().split('\n')
+		services.close()
+		hits = []
+		query = 'match ' + str(service_name) + ' '
+		for line in lines:
+			if query in line:
+				hits.append(line)
+		# if we can, remove any complex regex's
+		#hit = hits[1]
+		for hit in hits:
+			test = hit[len(query):]
+			delim = test[1]
+			regex = NmapServiceServer.find_between(test, delim, delim)
+			if delim+"i" in hit:
+				continue
+			if delim+"s" in hit:
+				continue
+			print("found regex:" + regex, "from hit:"+hit)
+			return regex
+		return ''
+
+	@staticmethod
+	def find_between(s, first, last):
+		try:
+			start = s.index(first) + len(first)
+			end = s.index(last, start)
+			return s[start:end]
+		except ValueError:
+			return ""
+
+	def _genRegexString(self):
+		return rstr.xeger(self.expression)
+
+	def _setIPTables(self):
+		if self.tcp:
+			set_iptable = 'iptables -A OUTPUT -p tcp --tcp-flags RST RST --sport ' + str(self.port) + ' -j DROP'
+		elif self.udp:
+			set_iptable = 'iptables -I OUTPUT -p icmp --icmp-type destination-unreachable -j DROP'
+		if not set_iptable in os.popen('iptables-save').read():
+			os.system(set_iptable)
+
+	def _cleanIPTables(self):
+		# TODO change to restore iptables
+		os.system('iptables -F')
+		os.system('iptables -X')
+
+	def _stopFilter(self, packet):
+		return self._stopper
+
+	# called as daemon
+	def _startService(self):
+		self._setIPTables()
+		if self.tcp:
+			print(tcp_color + 'tcp server starting:', self.ip_addr, ":", self.port)
+			print(reset_color, end="")
+			sniff(filter="tcp[tcpflags] & tcp-syn != 0 and dst host " + self.ip_addr + " and port " + str(self.port),
+				  prn=self.answerTCP, iface=self.iface, stop_filter=self._stopFilter)
+		elif self.udp:
+			print(udp_color + 'udp server starting:', self.ip_addr, ":", self.port)
+			print(reset_color, end="")
+			sniff(filter="udp and dst host " + self.ip_addr + " and port " + str(self.port),
+				  prn=self.answerUDP, iface=self.iface, stop_filter=self._stopFilter)
+		print(reset_color + 'sniffing set for '+str(self.port))
+
+		while not self._stopper:
+			try:
+				time.sleep(.75)
+			except KeyboardInterrupt:
+				break
+			except:
+				break
+		print(green + "Server Done for "+str(self.port) + reset_color)
+
+	def answerTCP(self, packet):
+		print(tcp_color + 'New tcp client:')
+		packet.summary()
+		print(reset_color, end="")
+
+		ValueOfPort = packet.sport
+		SeqNr = packet.seq
+		AckNr = packet.seq+1
+		victim_ip = packet['IP'].src
+
+		# send syn ack
+		ip = IP(src=self.ip_addr, dst=victim_ip)
+		tcp_synack = TCP(sport=self.port, dport=ValueOfPort, flags="SA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
+		handshake = ip/tcp_synack
+		print(tcp_color, end="")
+		ANSWER = sr1(handshake, timeout=8)
+		print(reset_color, end="")
+		if not ANSWER:
+			print(red + "TIMEOUT on syn ack" + reset_color)
+			return ""
+
+		# Capture next TCP packet if the client talks first
+		#GEThttp = sniff(filter="tcp and src host "+str(victim_ip)+" and port "+str(server_port),count=1)
+		#GEThttp = GEThttp[0]
+		#AckNr = AckNr+len(GEThttp['Raw'].load)
+
+		# send psh ack (main tcp packet)
+		SeqNr += 1
+		#payload="HTTP/1.1 200 OK\x0d\x0aDate: Wed, 29 Sep 2010 20:19:05 GMT\x0d\x0aServer: Testserver\x0d\x0aConnection: Keep-Alive\x0d\x0aContent-Type: text/html; charset=UTF-8\x0d\x0aContent-Length: 291\x0d\x0a\x0d\x0a<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\"><html><head><title>Testserver</title></head><body bgcolor=\"black\" text=\"white\" link=\"blue\" vlink=\"purple\" alink=\"red\"><p><font face=\"Courier\" color=\"blue\">-Welcome to test server-------------------------------</font></p></body></html>"
+		payload = self._genRegexString()
+		tcp_pshack = TCP(sport=self.port, dport=ValueOfPort, flags="PA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
+		tcp_main = ip/tcp_pshack/payload
+		print(tcp_color, end="")
+		ACKDATA = sr1(tcp_main, timeout=5)
+		print(reset_color, end="")
+		if not ACKDATA:
+			print(red + "TIMEOUT on syn ack" + reset_color)
+			return ""
+
+		# send fin
+		SeqNr = ACKDATA.ack
+		tcp_fin_ack = TCP(sport=self.port, dport=ValueOfPort, flags="FA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
+		print(tcp_color, end="")
+		send(ip/tcp_fin_ack)
+		print(tcp_color+'tcp client done' + reset_color)
 		return ""
-	
-	# send fin
-	SeqNr=ACKDATA.ack
-	Bye=TCP(sport=server_port, dport=ValueOfPort, flags="FA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
-	print(tcp_color,end="")
-	send(ip/Bye)
-	print(tcp_color+'tcp client done' + reset_color)
-	return ""
 
-def answerUDP(packet):
-	print(udp_color + 'New udp client:')
-	packet.summary()
-	print(reset_color, end="") 
-	ValueOfPort = packet.sport
-	victim_ip = packet['IP'].src
-	
-	ip = IP(src=ip_addr, dst=victim_ip)
-	udp = UDP(sport=server_port, dport=ValueOfPort)
-	payload = rstr.xeger(udp_expression)
-	udp_main = ip/udp/payload
-	print(udp_color, end="") 
-	send(udp_main)
-	print(udp_color + 'udp client done' + reset_color)
-	return ""
+	def answerUDP(self, packet):
+		print(udp_color + 'New udp client:')
+		packet.summary()
+		print(reset_color, end="")
+		ValueOfPort = packet.sport
+		victim_ip = packet['IP'].src
 
-def startTCP():
-	print(tcp_color + 'tcp server starting:', ip_addr, ":", server_port)
-	print(reset_color,end="") 
-	sniff(filter="tcp[tcpflags] & tcp-syn != 0 and dst host "+ip_addr+" and port "+str(server_port), prn=answerTCP, iface=ifacee)
+		ip = IP(src=self.ip_addr, dst=victim_ip)
+		udp = UDP(sport=self.port, dport=ValueOfPort)
+		payload = self._genRegexString()
+		udp_main = ip/udp/payload
+		print(udp_color, end="")
+		send(udp_main)
+		print(udp_color + 'udp client done' + reset_color)
+		return ""
 
-def startUDP():
-	print(udp_color + 'udp server starting:', ip_addr, ":", server_port)
-	print(reset_color,end="") 
-	sniff(filter="udp and dst host "+ip_addr+" and port "+str(server_port), prn=answerUDP, iface=ifacee)
+
+def findnth(haystack, needle, n):
+	parts = haystack.split(needle, n+1)
+	if len(parts) <= n+1:
+		return -1
+	return len(haystack)-len(parts[-1])-len(needle)
 
 
 if __name__ == '__main__':
-	
-	# Get IP addr and set iptables (if needed)
-	ni.ifaddresses(ifacee)
-	ip_addr = ni.ifaddresses(ifacee)[ni.AF_INET][0]['addr']
-	
+	#'''
+	# Nmap Test Suite
+	import paramiko
+	i_port = 1000
+	resume_port = i_port
+	eth = 'eth0'
+	ssh = paramiko.SSHClient()
+	ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+	ssh.connect('10.0.0.8', 22, 'root', 'toor')
+	time.sleep(3)
+	services = open('/usr/share/nmap/nmap-service-probes', 'r')
+	lines = services.read().split('\n')
+	services.close()
+	results_file_good = '/root/nmap_results_good.txt'
+	results_file_bad = '/root/nmap_results_bad.txt'
+	for line in lines:
+		if not 'match ' in line:
+			continue
+		test = line[findnth(line, ' ', 1)+1:]
+		delim = test[1]
+		regex = NmapServiceServer.find_between(test, delim, delim)
+		if delim + "i" in line:
+			continue
+		if delim + "s" in line:
+			continue
+		print("test:" + test)
+		print("delim:" + delim)
+		print("regex:" + regex)
+		print("line:" + line)
+		try:
+			server = NmapServiceServer(i_port, eth, expression=regex)
+			server.start()
+			time.sleep(1.5)
+			if i_port < resume_port:
+				i_port += 1
+				server.stop()
+				time.sleep(2)
+				continue
+			command = "nmap 10.0.0.9 -sV --version-all -p "+str(i_port)+" -oN /root/nmap_test/"+str(i_port)+".txt"
+			print(command)
+			stdin,stdout,stderr = ssh.exec_command(command)
+			results = stdout.read()
+			results = results.decode('utf-8')
+			server.stop()
+			dst = ""
+			if 'unrecognized despite returning data' in results:
+				w = open(results_file_bad, 'a+')
+				w.write(str(i_port)+",unrecognized,"+line+",,,"+regex+"\n")
+				w.close()
+				dst = 'unrecognized'
+			elif 'tcp closed' in results:
+				w = open(results_file_bad, 'a+')
+				w.write(str(i_port)+",closed,"+line+",,,"+regex+"\n")
+				w.close()
+				dst = 'closed'
+			elif 'tcpwrapped' in results:
+				w = open(results_file_bad, 'a+')
+				w.write(str(i_port)+",tcpwrapped,"+line+",,,"+regex+"\n")
+				w.close()
+				dst = 'tcpwrapped'
+			else:
+				w = open(results_file_good, 'a+')
+				w.write(str(i_port)+","+line+",,,"+regex+"\n")
+				w.close()
+				dst = 'good'
+			print('result was '+dst)
+			stdin, stdout, stderr = ssh.exec_command("cp /root/nmap_test/" + str(i_port) + ".txt /root/nmap_test/" + dst)
+			stdout.read()
+			i_port += 1
+			time.sleep(2)
+		except Exception as e:
+			print(e)
+			w = open('/root/nmap_err.txt', 'a+')
+			w.write(str(i_port) + ","+str(e)+"," + line + ",,," + regex + "\n")
+			w.close()
+
+	print(green + "Done Done" + reset_color)
+	#'''
+	'''
 	# Start "servers"
-	if tcp_expression:
-		set_iptable = 'iptables -A OUTPUT -p tcp --tcp-flags RST RST --sport '+str(server_port)+' -j DROP'
-		if not set_iptable in os.popen('iptables-save').read():
-			os.system(set_iptable)
-		tcp_thread = threading.Thread(target=startTCP)
-		tcp_thread.daemon = True
-		tcp_thread.start()
-	if udp_expression:
-		set_iptable = 'iptables -I OUTPUT -p icmp --icmp-type destination-unreachable -j DROP'
-		if not set_iptable in os.popen('iptables-save').read():
-			os.system(set_iptable)
-		udp_thread = threading.Thread(target=startUDP)
-		udp_thread.daemon = True
-		udp_thread.start()
-	print(reset_color+'threads started')
+	#udp_expression = r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED'  # r'^ok$'  #r'^BUSY$'
+	#tcp_expression = r'^ok$'
+	servers = [NmapServiceServer(80, 'eth0', expression=r'^ok$'),
+			   NmapServiceServer(8000, 'eth0', expression=r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED', tcp=True),
+			   NmapServiceServer(1000, 'eth0', expression=r'^S\xf5\xc6\x1a{'), #r'^HELP\r\n$'), #expression=r'^BUSY$'),
+			   NmapServiceServer(1001, 'eth0', service_name='1c-server ')]
+	for server in servers:
+		server.start()
+	print(reset_color+'Servers started')
 
 	# Wait till killed
 	while 1:
@@ -156,8 +318,11 @@ if __name__ == '__main__':
 			break
 		except:
 			break
+	for server in servers:
+		server.stop()
 	#TODO clean iptables - not super important for RST though on high ports
-	print(green + "Done" +  reset_color)
+	print(green + "Done Done" + reset_color)
+	#'''
 
 '''
 NOTES
