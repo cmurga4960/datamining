@@ -43,12 +43,13 @@ green = Fore.GREEN if color else ''
 
 
 class NmapServiceServer:
-	def __init__(self, port, net_iface, expression=r'', service_name='', tcp=True):
+	def __init__(self, port, net_iface, expression=r'', service_name='', tcp=True, line="", regex=""):
 		self.port = port
+		self.service_name = service_name.strip()
 		if expression:
 			self.expression = expression
-		elif service_name:
-			self.expression = NmapServiceServer.findExpression(service_name.strip())
+		elif self.service_name:
+			self.expression = NmapServiceServer.findExpression(self.service_name)
 			if not self.expression:
 				raise Exception('Service not found by name')
 		else:
@@ -63,6 +64,9 @@ class NmapServiceServer:
 
 		ni.ifaddresses(self.iface)
 		self.ip_addr = ni.ifaddresses(self.iface)[ni.AF_INET][0]['addr']
+
+		self.line = line
+		self.regex = regex
 
 	def start(self):
 		self._stopper = False
@@ -92,7 +96,7 @@ class NmapServiceServer:
 				continue
 			if delim+"s" in hit:
 				continue
-			print("found regex:" + regex, "from hit:"+hit)
+			#print("found regex:" + regex, "from hit:"+hit)
 			return regex
 		return ''
 
@@ -128,16 +132,15 @@ class NmapServiceServer:
 	def _startService(self):
 		self._setIPTables()
 		if self.tcp:
-			print(tcp_color + 'tcp server starting:', self.ip_addr, ":", self.port)
-			print(reset_color, end="")
+			print(tcp_color + 'tcp server starting:', self.ip_addr, ":", self.port, reset_color)
 			sniff(filter="tcp[tcpflags] & tcp-syn != 0 and dst host " + self.ip_addr + " and port " + str(self.port),
 				  prn=self.answerTCP, iface=self.iface, stop_filter=self._stopFilter)
 		elif self.udp:
-			print(udp_color + 'udp server starting:', self.ip_addr, ":", self.port)
-			print(reset_color, end="")
+			#print(udp_color + 'udp server starting:', self.ip_addr, ":", self.port)
+			#print(reset_color, end="")
 			sniff(filter="udp and dst host " + self.ip_addr + " and port " + str(self.port),
 				  prn=self.answerUDP, iface=self.iface, stop_filter=self._stopFilter)
-		print(reset_color + 'sniffing set for '+str(self.port))
+		#print(reset_color + 'sniffing set for '+str(self.port))
 
 		while not self._stopper:
 			try:
@@ -146,12 +149,12 @@ class NmapServiceServer:
 				break
 			except:
 				break
-		print(green + "Server Done for "+str(self.port) + reset_color)
+		#print(green + "Server Done for "+str(self.port) + reset_color)
 
 	def answerTCP(self, packet):
-		print(tcp_color + 'New tcp client:')
-		packet.summary()
-		print(reset_color, end="")
+		#print(tcp_color + 'New tcp client:')
+		#packet.summary()
+		#print(reset_color, end="")
 
 		ValueOfPort = packet.sport
 		SeqNr = packet.seq
@@ -162,11 +165,11 @@ class NmapServiceServer:
 		ip = IP(src=self.ip_addr, dst=victim_ip)
 		tcp_synack = TCP(sport=self.port, dport=ValueOfPort, flags="SA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
 		handshake = ip/tcp_synack
-		print(tcp_color, end="")
-		ANSWER = sr1(handshake, timeout=8)
-		print(reset_color, end="")
+		#print(tcp_color, end="")
+		ANSWER = sr1(handshake, timeout=8, verbose=0)
+		#print(reset_color, end="")
 		if not ANSWER:
-			print(red + "TIMEOUT on syn ack" + reset_color)
+			#print(red + "TIMEOUT on syn ack" + reset_color)
 			return ""
 
 		# Capture next TCP packet if the client talks first
@@ -180,25 +183,25 @@ class NmapServiceServer:
 		payload = self._genRegexString()
 		tcp_pshack = TCP(sport=self.port, dport=ValueOfPort, flags="PA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
 		tcp_main = ip/tcp_pshack/payload
-		print(tcp_color, end="")
-		ACKDATA = sr1(tcp_main, timeout=5)
-		print(reset_color, end="")
+		#print(tcp_color, end="")
+		ACKDATA = sr1(tcp_main, timeout=5, verbose=0)
+		#print(reset_color, end="")
 		if not ACKDATA:
-			print(red + "TIMEOUT on syn ack" + reset_color)
+			#print(red + "TIMEOUT on syn ack" + reset_color)
 			return ""
 
 		# send fin
 		SeqNr = ACKDATA.ack
 		tcp_fin_ack = TCP(sport=self.port, dport=ValueOfPort, flags="FA", seq=SeqNr, ack=AckNr, options=[('MSS', 1460)])
-		print(tcp_color, end="")
-		send(ip/tcp_fin_ack)
-		print(tcp_color+'tcp client done' + reset_color)
+		#print(tcp_color, end="")
+		send(ip/tcp_fin_ack, verbose=0)
+		#print(tcp_color+'tcp client done' + reset_color)
 		return ""
 
 	def answerUDP(self, packet):
-		print(udp_color + 'New udp client:')
+		#print(udp_color + 'New udp client:')
 		packet.summary()
-		print(reset_color, end="")
+		#print(reset_color, end="")
 		ValueOfPort = packet.sport
 		victim_ip = packet['IP'].src
 
@@ -206,9 +209,9 @@ class NmapServiceServer:
 		udp = UDP(sport=self.port, dport=ValueOfPort)
 		payload = self._genRegexString()
 		udp_main = ip/udp/payload
-		print(udp_color, end="")
+		#print(udp_color, end="")
 		send(udp_main)
-		print(udp_color + 'udp client done' + reset_color)
+		#print(udp_color + 'udp client done' + reset_color)
 		return ""
 
 
@@ -222,8 +225,113 @@ def findnth(haystack, needle, n):
 if __name__ == '__main__':
 	#'''
 	# Nmap Test Suite
+	''' batch method
 	import paramiko
-	i_port = 1000
+	i_port = 20000
+	resume_port = i_port
+	eth = 'eth0'
+	ssh = paramiko.SSHClient()
+	ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+	ssh.connect('10.0.0.8', 22, 'root', 'toor')
+	time.sleep(3)
+	services = open('/usr/share/nmap/nmap-service-probes', 'r')
+	lines = services.read().split('\n')
+	services.close()
+	results_file_good = '/root/nmap2_results_good.txt'
+	results_file_bad = '/root/nmap2_results_bad.txt'
+	servers = []
+	smallest_port = 700000
+	largest_port = 0
+	for line in lines:
+		if not 'match ' in line:
+			continue
+		if line[0] == '#':
+			continue
+		test = line[findnth(line, ' ', 1)+1:]
+		delim = test[1]
+		service_name = NmapServiceServer.find_between(test,' ',' ')
+		regex = NmapServiceServer.find_between(test, delim, delim)
+		if delim + "i" in line:
+			continue
+		if delim + "s" in line:
+			continue
+		#print("test:" + test)
+		#print("delim:" + delim)
+		#print("regex:" + regex)
+		#print("line:" + line)
+		#try:
+		server = NmapServiceServer(i_port, eth, expression=regex, service_name=service_name, line=line, regex=regex)
+		server.start()
+		servers.append(server)
+		if i_port < smallest_port:
+			smallest_port = i_port
+		if i_port > largest_port:
+			largest_port = i_port
+		i_port += 1
+
+		if len(servers) >= 500:
+			print('wait for threads to catch up')
+			time.sleep(15) #wait for servers to start
+			command = "nmap 10.0.0.9 -T5 -sV --version-all -p " + str(smallest_port) + "-"+\
+					  str(largest_port)+" -oN /root/nmap_test2/" + str(smallest_port) + "_"+\
+					  str(largest_port) + ".txt"
+			print(command, "... make take a while...")
+			stdin, stdout, stderr = ssh.exec_command(command)
+			results = stdout.read()
+			results = results.decode('utf-8')
+			print('nmap done')
+			for server in servers:
+				for line in results.split('\n'):
+					if str(server.port)+"/tcp " in line:
+						if "?" in line:
+							w = open(results_file_bad, 'a+')
+							w.write(str(server.port) + ",,,unrecognized,,,"+ server.service_name +
+									",,," + server.line + ",,," + server.regex + "\n")
+							w.close()
+						elif str(server.port)+"/tcp closed" in results:
+							w = open(results_file_bad, 'a+')
+							w.write(str(server.port) + ",,,closed,,," + server.service_name +
+									",,," + server.line + ",,," + server.regex + "\n")
+							w.close()
+						elif 'tcpwrapped' in results:
+							w = open(results_file_bad, 'a+')
+							w.write(str(server.port) + ",,,tcpwrapped,,," + server.service_name +
+									",,," + server.line + ",,," + server.regex + "\n")
+							w.close()
+						else:
+							w = open(results_file_good, 'a+')
+							w.write(str(server.port) + ",,,good,,," + server.service_name +
+									",,," + server.line + ",,," + server.regex + "\n")
+							w.close()
+				server.stop()
+			servers.clear()
+
+			smallest_port = 700000
+			largest_port = 0
+			print('wait for threads to die')
+			time.sleep(30)
+			print('next round...')
+		#except Exception as e:
+		#	print(e)
+		#	w = open('/root/nmap2_err.txt', 'a+')
+		#	w.write(str(i_port) + "," + str(e) + "," + line + ",,," + regex + "\n")
+		#	w.close()
+
+	print(green + "Done Done " +str(len(servers))+ reset_color)
+	while 1:
+		try:
+			time.sleep(1)
+		except Exception:
+			break
+	for s in servers:
+		s.close()
+	'''
+
+
+	''' slow way
+	# Nmap Test Suite
+	import paramiko
+	i_port = 20000
 	resume_port = i_port
 	eth = 'eth0'
 	ssh = paramiko.SSHClient()
@@ -245,10 +353,10 @@ if __name__ == '__main__':
 			continue
 		if delim + "s" in line:
 			continue
-		print("test:" + test)
-		print("delim:" + delim)
-		print("regex:" + regex)
-		print("line:" + line)
+		#print("test:" + test)
+		#print("delim:" + delim)
+		#print("regex:" + regex)
+		#print("line:" + line)
 		try:
 			server = NmapServiceServer(i_port, eth, expression=regex)
 			server.start()
@@ -258,7 +366,7 @@ if __name__ == '__main__':
 				server.stop()
 				time.sleep(2)
 				continue
-			command = "nmap 10.0.0.9 -sV --version-all -p "+str(i_port)+" -oN /root/nmap_test/"+str(i_port)+".txt"
+			command = "nmap 10.0.0.9 -T5 -sV --version-all -p "+str(i_port)+" -oN /root/nmap_test/"+str(i_port)+".txt"
 			print(command)
 			stdin,stdout,stderr = ssh.exec_command(command)
 			results = stdout.read()
@@ -297,13 +405,17 @@ if __name__ == '__main__':
 			w.close()
 
 	print(green + "Done Done" + reset_color)
-	#'''
 	'''
+
+
+
+	#'''
+	#'''
 	# Start "servers"
 	#udp_expression = r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED'  # r'^ok$'  #r'^BUSY$'
 	#tcp_expression = r'^ok$'
 	servers = [NmapServiceServer(80, 'eth0', expression=r'^ok$'),
-			   NmapServiceServer(8000, 'eth0', expression=r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED', tcp=True),
+			   NmapServiceServer(8000, 'eth0', expression=r'^2;http://[\d.]+:\d+/;[\d.]+;\d+:\d+;\w+,[\d.]+,PLUGIN_LOADED', tcp=False),
 			   NmapServiceServer(1000, 'eth0', expression=r'^S\xf5\xc6\x1a{'), #r'^HELP\r\n$'), #expression=r'^BUSY$'),
 			   NmapServiceServer(1001, 'eth0', service_name='1c-server ')]
 	for server in servers:
